@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Human Gene Explorer</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1d2330; --muted:#667085; --line:#d9dde5; --accent:#1f6feb; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:18px 24px 6px; }
+  h1 { margin:0; font-size:22px; }
+  header p { margin:4px 0 0; color:var(--muted); font-size:13px; }
+  .controls { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; padding:14px 24px; }
+  label { display:flex; flex-direction:column; font-size:12px; color:var(--muted); gap:4px; }
+  select, input[type=text] { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--ink); min-width:150px; }
+  #geneSel { min-width:340px; max-width:90vw; }
+  button { font:inherit; padding:8px 14px; border:1px solid var(--line); border-radius:6px; background:#fff; cursor:pointer; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .check { flex-direction:row; align-items:center; gap:6px; font-size:13px; color:var(--ink); }
+  #status { padding:0 24px 8px; font-size:13px; color:var(--muted); min-height:20px; }
+  #status.err { color:#b42318; }
+  main { display:grid; grid-template-columns:1fr 1fr; gap:16px; padding:0 24px 24px; }
+  @media (max-width:900px){ main { grid-template-columns:1fr; } }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; display:flex; flex-direction:column; }
+  .panel-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:8px; flex-wrap:wrap; }
+  .panel-head h2 { margin:0; font-size:15px; }
+  .panel-head div { display:flex; gap:6px; }
+  .panel-head button { padding:4px 10px; font-size:12px; }
+  #details { margin:0 24px 24px; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 20px; }
+  #details h2 { margin:0 0 4px; font-size:18px; }
+  #details h3 { margin:18px 0 6px; font-size:14px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); border-bottom:1px solid var(--line); padding-bottom:4px; }
+  #details a { color:var(--accent); text-decoration:none; word-break:break-word; }
+  #details a:hover { text-decoration:underline; }
+  #details dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:0; }
+  #details dt { color:var(--muted); font-size:13px; }
+  #details dd { margin:0; }
+  #details ol { margin:0; padding-left:22px; }
+  #details li { margin-bottom:10px; }
+  #details .ref-links { font-size:13px; display:block; }
+  #details .empty { color:var(--muted); }
+  #details p { margin:6px 0; }
+  textarea { width:100%; height:42vh; min-height:240px; resize:vertical; font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; border:1px solid var(--line); border-radius:6px; padding:10px; white-space:pre; overflow:auto; }
+  #history { white-space:pre-wrap; }
+  footer { padding:0 24px 24px; font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Human Gene Explorer</h1>
+  <p>Choose a chromosome, then a gene. The page fetches sequences from NCBI, and history and literature from NCBI Gene, HGNC and PubMed.</p>
+</header>
+
+<div class="controls">
+  <label>Chromosome
+    <select id="chrSel"><option value="">— select —</option></select>
+  </label>
+  <label>Gene (symbol — name)
+    <select id="geneSel" disabled><option value="">— select a chromosome first —</option></select>
+  </label>
+  <label>Filter genes
+    <input type="text" id="filter" placeholder="type to filter list" disabled>
+  </label>
+  <label>…or type a gene symbol
+    <input type="text" id="manual" placeholder="e.g. TP53">
+  </label>
+  <label class="check"><input type="checkbox" id="codingOnly" checked> protein-coding only</label>
+  <label class="check"><input type="checkbox" id="useU" checked> show RNA with U (not T)</label>
+  <button class="primary" id="goBtn" disabled>Load gene</button>
+</div>
+<div id="status"></div>
+
+<main>
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Genomic DNA (FASTA)</h2>
+      <div><button data-copy="genomic">Copy</button><button data-save="genomic">Download</button></div>
+    </div>
+    <textarea id="genomic" readonly placeholder="Genomic FASTA of the gene region (gene strand) will appear here."></textarea>
+  </section>
+  <section class="panel">
+    <div class="panel-head">
+      <h2>RNA (FASTA)</h2>
+      <div><button data-copy="rna">Copy</button><button data-save="rna">Download</button></div>
+    </div>
+    <textarea id="rna" readonly placeholder="RefSeq RNA transcripts (FASTA) will appear here."></textarea>
+  </section>
+</main>
+
+<section id="details"><span class="empty">Gene details, history, description and the first / last 5 PubMed papers (with clickable links) will appear here.</span></section>
+<footer>
+  Data sources: NCBI E-utilities (Gene, Nuccore, PubMed), MyGene.info, HGNC REST. OMIM does not allow browser access without an API key, so its entry is linked rather than read.
+</footer>
+
+<script>
+const EU = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/';
+const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let lastCall = 0;
+let genes = [];          // [{symbol,name,id}]
+let rawRNA = '';         // RNA FASTA before T->U conversion
+let rawGenomic = '';
+
+function setStatus(msg, err=false){ const s=$('status'); s.textContent=msg; s.className=err?'err':''; }
+
+// NCBI allows ~3 requests/second without an API key
+async function ncbi(path){
+  const wait = Math.max(0, lastCall + 400 - Date.now());
+  if (wait) await sleep(wait);
+  lastCall = Date.now();
+  const r = await fetch(EU + path + (path.includes('?')?'&':'?') + 'tool=human_gene_explorer');
+  if (!r.ok) throw new Error('NCBI request failed (' + r.status + ')');
+  return r;
+}
+
+// ---------- chromosome list ----------
+['1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','20','21','22','X','Y','MT']
+  .forEach(c => { const o=document.createElement('option'); o.value=c; o.textContent='Chromosome '+c; $('chrSel').appendChild(o); });
+
+// ---------- gene list for a chromosome (MyGene.info) ----------
+async function loadGenes(){
+  const chr = $('chrSel').value;
+  genes = [];
+  $('geneSel').disabled = true; $('filter').disabled = true; $('goBtn').disabled = true;
+  $('geneSel').innerHTML = '<option value="">loading…</option>';
+  if (!chr) { $('geneSel').innerHTML='<option value="">— select a chromosome first —</option>'; return; }
+  setStatus('Loading genes on chromosome ' + chr + '…');
+  try {
+    let err1 = '';
+    try { await listFromNCBI(chr); }
+    catch (e1) {
+      err1 = e1.message; genes = [];
+      setStatus('NCBI list failed (' + err1 + '), trying MyGene.info…');
+      await listFromMyGene(chr);
+    }
+    const seen = new Set();
+    genes = genes.filter(g => !seen.has(g.id) && seen.add(g.id)).sort((a,b)=>a.symbol.localeCompare(b.symbol, 'en', {numeric:true}));
+    renderGenes('');
+    $('geneSel').disabled = false; $('filter').disabled = false;
+    setStatus(genes.length + ' genes on chromosome ' + chr + '.');
+  } catch (e) {
+    $('geneSel').innerHTML = '<option value="">— error —</option>';
+    setStatus('Could not load the gene list: ' + e.message + '. If you opened this file inside a preview pane, open it in a normal browser tab; or type a gene symbol in the box and press Load gene.', true);
+    $('goBtn').disabled = false;
+  }
+}
+$('manual').addEventListener('input', () => { $('goBtn').disabled = !($('manual').value.trim() || $('geneSel').value); });
+
+async function ncbiPost(path, body){
+  const wait = Math.max(0, lastCall + 400 - Date.now());
+  if (wait) await sleep(wait);
+  lastCall = Date.now();
+  const r = await fetch(EU + path, { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: body + '&tool=human_gene_explorer' });
+  if (!r.ok) throw new Error('NCBI request failed (' + r.status + ')');
+  return r;
+}
+
+// Primary source: NCBI Gene (esearch for IDs, then esummary in batches)
+async function listFromNCBI(chr){
+  let term = chr + '[CHR] AND "Homo sapiens"[Organism] AND alive[prop]';
+  if ($('codingOnly').checked) term += ' AND genetype protein coding[Properties]';
+  const sr = await ncbi('esearch.fcgi?db=gene&retmode=json&retmax=10000&term=' + encodeURIComponent(term));
+  const sj = await sr.json();
+  const ids = (sj.esearchresult && sj.esearchresult.idlist) || [];
+  if (!ids.length) throw new Error('NCBI returned no genes');
+  for (let i = 0; i < ids.length; i += 300) {
+    setStatus('Loading gene names… ' + Math.min(i + 300, ids.length) + ' / ' + ids.length);
+    const r = await ncbiPost('esummary.fcgi', 'db=gene&retmode=json&id=' + ids.slice(i, i + 300).join(','));
+    const j = await r.json();
+    (j.result.uids || []).forEach(u => {
+      const g = j.result[u];
+      if (g && g.name) genes.push({ symbol: g.name, name: g.description || '', id: String(u) });
+    });
+  }
+}
+
+// Backup source: MyGene.info
+async function listFromMyGene(chr){
+  let q = 'genomic_pos.chr:' + chr;
+  if ($('codingOnly').checked) q += ' AND type_of_gene:protein-coding';
+  let from = 0, total = Infinity;
+  while (from < total && from < 9000) {
+    const r = await fetch('https://mygene.info/v3/query?species=human&fields=symbol,name,entrezgene&size=1000&from=' + from + '&q=' + encodeURIComponent(q));
+    if (!r.ok) throw new Error('MyGene.info request failed (' + r.status + ')');
+    const j = await r.json();
+    total = j.total;
+    (j.hits || []).forEach(h => { if (h.symbol && h.entrezgene) genes.push({symbol:h.symbol, name:h.name||'', id:String(h.entrezgene)}); });
+    if (!j.hits || !j.hits.length) break;
+    from += 1000;
+  }
+}
+
+// Manual lookup by gene symbol
+async function resolveSymbol(sym){
+  const r = await ncbi('esearch.fcgi?db=gene&retmode=json&retmax=1&term=' + encodeURIComponent(sym + '[Gene Name] AND "Homo sapiens"[Organism] AND alive[prop]'));
+  const j = await r.json();
+  const id = ((j.esearchresult || {}).idlist || [])[0];
+  if (!id) throw new Error('Human gene symbol "' + sym + '" not found');
+  return { symbol: sym.toUpperCase(), name: '', id };
+}
+
+function renderGenes(filter){
+  const f = filter.trim().toLowerCase();
+  const sel = $('geneSel');
+  sel.innerHTML = '<option value="">— select a gene —</option>';
+  const frag = document.createDocumentFragment();
+  genes.forEach(g => {
+    if (f && !(g.symbol.toLowerCase().includes(f) || g.name.toLowerCase().includes(f))) return;
+    const o = document.createElement('option');
+    o.value = g.id; o.textContent = g.symbol + ' — ' + g.name;
+    frag.appendChild(o);
+  });
+  sel.appendChild(frag);
+}
+
+$('chrSel').addEventListener('change', loadGenes);
+$('codingOnly').addEventListener('change', () => { if ($('chrSel').value) loadGenes(); });
+$('filter').addEventListener('input', e => { renderGenes(e.target.value); $('goBtn').disabled = true; });
+$('geneSel').addEventListener('change', () => { $('goBtn').disabled = !$('geneSel').value; });
+$('useU').addEventListener('change', renderFasta);
+
+// ---------- sequences ----------
+function toRNA(fasta){
+  return fasta.split('\n').map(l => l.startsWith('>') ? l : l.replace(/T/g,'U').replace(/t/g,'u')).join('\n');
+}
+function renderFasta(){
+  $('genomic').value = rawGenomic ? rawGenomic.trim() + '\n' : '';
+  $('rna').value = rawRNA ? ($('useU').checked ? toRNA(rawRNA) : rawRNA).trim() + '\n' : '';
+}
+
+async function loadSequences(gene, summary){
+  rawGenomic = ''; rawRNA = '';
+  const gi = (summary.genomicinfo || [])[0];
+  if (gi) {
+    const lo = Math.min(gi.chrstart, gi.chrstop) + 1, hi = Math.max(gi.chrstart, gi.chrstop) + 1;
+    const strand = gi.chrstart > gi.chrstop ? 2 : 1;
+    setStatus('Fetching genomic sequence (' + (hi-lo+1).toLocaleString() + ' bp)…');
+    const r = await ncbi('efetch.fcgi?db=nuccore&rettype=fasta&retmode=text&id=' + gi.chraccver + '&seq_start=' + lo + '&seq_stop=' + hi + '&strand=' + strand);
+    rawGenomic = await r.text();
+  } else {
+    rawGenomic = '';
+  }
+  setStatus('Fetching RNA transcripts…');
+  const lr = await ncbi('elink.fcgi?dbfrom=gene&db=nuccore&linkname=gene_nuccore_refseqrna&retmode=json&id=' + gene.id);
+  const lj = await lr.json();
+  const ids = (((lj.linksets||[])[0]||{}).linksetdbs||[]).flatMap(d => d.links || []).slice(0, 30);
+  if (ids.length) {
+    const r = await ncbi('efetch.fcgi?db=nuccore&rettype=fasta&retmode=text&id=' + ids.join(','));
+    rawRNA = await r.text();
+  } else {
+    rawRNA = '; No RefSeq RNA records linked to this gene.\n';
+  }
+  if (!gi) rawGenomic = '; No genomic coordinates found for this gene in the current assembly.\n';
+  renderFasta();
+}
+
+// ---------- history + PubMed ----------
+const esc = t => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const link = (url, text) => '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + esc(text) + '</a>';
+
+function fmtCitation(p){
+  const au = (p.authors||[]).map(a=>a.name);
+  const authors = au.length > 3 ? au.slice(0,3).join(', ') + ', et al.' : au.join(', ');
+  const ids = p.articleids || [];
+  const doi = ids.find(a => a.idtype === 'doi');
+  const pmc = ids.find(a => a.idtype === 'pmc');
+  let cite = (authors ? authors + '. ' : '') + (p.title||'').replace(/\.$/,'') + '. ' + (p.source||'') + '. ' + (p.pubdate||'');
+  if (p.volume) cite += ';' + p.volume + (p.issue ? '(' + p.issue + ')' : '');
+  if (p.pages) cite += ':' + p.pages;
+  cite += '.';
+  const links = [link('https://pubmed.ncbi.nlm.nih.gov/' + p.uid + '/', 'PubMed PMID ' + p.uid)];
+  if (doi) links.push(link('https://doi.org/' + doi.value, 'DOI ' + doi.value));
+  if (pmc) links.push(link('https://www.ncbi.nlm.nih.gov/pmc/articles/' + pmc.value + '/', 'Free full text (' + pmc.value + ')'));
+  return '<a href="https://pubmed.ncbi.nlm.nih.gov/' + p.uid + '/" target="_blank" rel="noopener noreferrer">' + esc(cite) + '</a>' +
+         '<span class="ref-links">' + links.join(' · ') + '</span>';
+}
+
+async function loadPapers(gene){
+  const lr = await ncbi('elink.fcgi?dbfrom=gene&db=pubmed&linkname=gene_pubmed&retmode=json&id=' + gene.id);
+  const lj = await lr.json();
+  const all = (((lj.linksets||[])[0]||{}).linksetdbs||[]).flatMap(d => d.links || []).map(Number).sort((a,b)=>a-b);
+  if (!all.length) return { total:0, first:[], last:[] };
+  // PMIDs are roughly chronological; take a wider sample at both ends, then sort by true publication date
+  const sample = [...new Set([...all.slice(0,40), ...all.slice(-40)])];
+  const sr = await ncbi('esummary.fcgi?db=pubmed&retmode=json&id=' + sample.join(','));
+  const sj = await sr.json();
+  const papers = sj.result.uids.map(u => sj.result[u]).sort((a,b) => (a.sortpubdate||'').localeCompare(b.sortpubdate||''));
+  return { total: all.length, first: papers.slice(0,5), last: papers.slice(-5).reverse() };
+}
+
+async function loadHistory(gene, summary){
+  const sym = summary.name || gene.symbol;
+  let h = '<h2>' + esc(sym) + ' — ' + esc(summary.description || gene.name) + '</h2>';
+
+  setStatus('Fetching HGNC nomenclature history…');
+  let hgnc = null;
+  try {
+    const r = await fetch('https://rest.genenames.org/fetch/symbol/' + encodeURIComponent(sym), { headers:{Accept:'application/json'} });
+    if (r.ok) { const j = await r.json(); hgnc = (j.response.docs||[])[0] || null; }
+  } catch(e) { /* optional source */ }
+  let omim = (hgnc && hgnc.omim_id) || [];
+  if (!omim.length) {
+    try {
+      const r = await fetch('https://mygene.info/v3/gene/' + gene.id + '?fields=MIM');
+      if (r.ok) { const j = await r.json(); if (j.MIM) omim = [].concat(j.MIM); }
+    } catch(e) {}
+  }
+
+  // ---- details ----
+  h += '<h3>Details</h3><dl>';
+  h += '<dt>NCBI Gene</dt><dd>' + link('https://www.ncbi.nlm.nih.gov/gene/' + gene.id, 'Gene ID ' + gene.id) + '</dd>';
+  h += '<dt>Chromosome</dt><dd>' + esc(summary.chromosome || 'n/a') + '</dd>';
+  h += '<dt>Cytogenetic location</dt><dd>' + esc(summary.maplocation || 'n/a') + '</dd>';
+  const gi = (summary.genomicinfo || [])[0];
+  if (gi) h += '<dt>Genomic coordinates</dt><dd>' + esc(gi.chraccver) + ': ' + (Math.min(gi.chrstart, gi.chrstop)+1).toLocaleString() + '–' + (Math.max(gi.chrstart, gi.chrstop)+1).toLocaleString() + ' (' + (gi.chrstart > gi.chrstop ? 'minus' : 'plus') + ' strand)</dd>';
+  if (summary.otheraliases) h += '<dt>Aliases</dt><dd>' + esc(summary.otheraliases) + '</dd>';
+  if (summary.otherdesignations) h += '<dt>Other names</dt><dd>' + esc(summary.otherdesignations.split('|').slice(0,4).join('; ')) + '</dd>';
+  if (hgnc) h += '<dt>HGNC</dt><dd>' + link('https://www.genenames.org/data/gene-symbol-report/#!/hgnc_id/' + hgnc.hgnc_id, hgnc.hgnc_id) + '</dd>';
+  h += '<dt>OMIM</dt><dd>' + (omim.length
+      ? omim.map(m => link('https://omim.org/entry/' + m, 'MIM ' + m)).join(', ') + ' <span class="empty">(open the entry for its “Cloning”/“History” sections)</span>'
+      : 'no entry linked — ' + link('https://omim.org/search?search=' + encodeURIComponent(sym), 'search OMIM')) + '</dd>';
+  h += '<dt>Other databases</dt><dd>' + [
+      link('https://www.genecards.org/cgi-bin/carddisp.pl?gene=' + encodeURIComponent(sym), 'GeneCards'),
+      link('https://www.ensembl.org/Homo_sapiens/Search/Results?q=' + encodeURIComponent(sym) + ';species=Homo_sapiens;site=ensembl', 'Ensembl'),
+      link('https://www.uniprot.org/uniprotkb?query=gene_exact:' + encodeURIComponent(sym) + '+AND+organism_id:9606', 'UniProt'),
+      link('https://www.ncbi.nlm.nih.gov/clinvar/?term=' + encodeURIComponent(sym) + '%5Bgene%5D', 'ClinVar')
+    ].join(' · ') + '</dd>';
+  h += '</dl>';
+
+  // ---- history ----
+  h += '<h3>History of the gene</h3>';
+  const hist = [];
+  if (hgnc) {
+    if (hgnc.date_approved_reserved) hist.push('Symbol first approved/reserved by HGNC on <b>' + esc(hgnc.date_approved_reserved) + '</b>.');
+    if (hgnc.prev_symbol) hist.push('Previous symbols: ' + esc(hgnc.prev_symbol.join(', ')) + (hgnc.date_symbol_changed ? ' (symbol last changed ' + esc(hgnc.date_symbol_changed) + ')' : '') + '.');
+    if (hgnc.prev_name) hist.push('Previous names: ' + esc(hgnc.prev_name.join('; ')) + (hgnc.date_name_changed ? ' (name last changed ' + esc(hgnc.date_name_changed) + ')' : '') + '.');
+    if (hgnc.alias_name) hist.push('Historical alias names: ' + esc(hgnc.alias_name.join('; ')) + '.');
+  }
+  const histPlaceholder = hist.length;
+  setStatus('Fetching PubMed references…');
+  const pp = await loadPapers(gene);
+  if (pp.first.length) {
+    const fy = (pp.first[0].sortpubdate||'').slice(0,4);
+    if (fy) hist.push('Earliest literature linked to this gene in NCBI: <b>' + esc(fy) + '</b> (first paper below), which approximates when the gene entered the scientific record.');
+  }
+  if (omim.length) hist.push('The OMIM entry (' + omim.map(m => link('https://omim.org/entry/' + m, 'MIM ' + m)).join(', ') + ') usually narrates the original cloning/mapping discoveries.');
+  h += hist.length ? '<ul>' + hist.map(x => '<li>' + x + '</li>').join('') + '</ul>' : '<p class="empty">No historical records found.</p>';
+
+  // ---- description ----
+  h += '<h3>Description</h3><p>' + (summary.summary ? esc(summary.summary) : '<span class="empty">No summary available.</span>') + '</p>';
+
+  // ---- papers ----
+  h += '<h3>PubMed — ' + pp.total.toLocaleString() + ' papers linked to this gene</h3>';
+  if (pp.first.length) {
+    h += '<p><b>First 5 papers (oldest first)</b></p><ol>' + pp.first.map(p => '<li>' + fmtCitation(p) + '</li>').join('') + '</ol>';
+    h += '<p style="margin-top:14px"><b>Last 5 papers (newest first)</b></p><ol>' + pp.last.map(p => '<li>' + fmtCitation(p) + '</li>').join('') + '</ol>';
+    h += '<p class="empty">First/last are chosen from the oldest and newest ~40 PubMed IDs by publication date. ' +
+         link('https://pubmed.ncbi.nlm.nih.gov/?linkname=gene_pubmed&from_uid=' + gene.id, 'See all papers for this gene on PubMed') + '.</p>';
+  } else {
+    h += '<p class="empty">No linked PubMed papers found.</p>';
+  }
+  $('details').innerHTML = h;
+}
+
+// ---------- main ----------
+$('goBtn').addEventListener('click', async () => {
+  const manual = $('manual').value.trim();
+  if (!manual && !$('geneSel').value) return;
+  $('goBtn').disabled = true;
+  $('genomic').value = ''; $('rna').value = ''; $('details').innerHTML = '<span class="empty">Loading…</span>';
+  try {
+    let gene;
+    if (manual) { setStatus('Looking up ' + manual + '…'); gene = await resolveSymbol(manual); }
+    else gene = genes.find(g => g.id === $('geneSel').value);
+    const id = gene.id;
+    setStatus('Fetching gene record…');
+    const r = await ncbi('esummary.fcgi?db=gene&retmode=json&id=' + id);
+    const j = await r.json();
+    const summary = j.result[id];
+    await loadHistory(gene, summary);
+    await loadSequences(gene, summary);
+    setStatus('Done: ' + gene.symbol + ' (Gene ID ' + id + ').');
+  } catch (e) {
+    setStatus('Error: ' + e.message, true);
+  } finally {
+    $('goBtn').disabled = false;
+  }
+});
+
+// ---------- copy / download ----------
+document.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', async () => {
+  const t = $(b.dataset.copy); t.select();
+  try { await navigator.clipboard.writeText(t.value); setStatus('Copied.'); } catch(e) { document.execCommand('copy'); }
+}));
+document.querySelectorAll('[data-save]').forEach(b => b.addEventListener('click', () => {
+  const k = b.dataset.save, t = $(k).value;
+  if (!t) return;
+  const sym = ($('manual').value.trim() || (genes.find(g => g.id === $('geneSel').value) || {symbol:'gene'}).symbol).toUpperCase();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([t], {type:'text/plain'}));
+  a.download = sym + (k === 'genomic' ? '_genomic.fasta' : '_RNA.fasta');
+  a.click(); URL.revokeObjectURL(a.href);
+}));
+</script>
+</body>
+</html>
